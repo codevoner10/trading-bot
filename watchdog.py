@@ -41,7 +41,6 @@ def main():
         try:
             current_time = get_utc_now()
             
-            # Reconnection Check
             if (current_time - last_reconnect_check).total_seconds() >= 600:
                 state._reconnect_supabase()
                 state._reconnect_redis()
@@ -60,10 +59,10 @@ def main():
                 send_telegram(f"🛑 <b>[WATCHDOG EXIT]</b> {WATCHDOG_NAME} finished shift.", channel="ops")
                 break
                 
-            # 3. Write Self-Heartbeat to Redis
+            # 3. Write Self-Heartbeat
             state.update_watchdog_heartbeat(WATCHDOG_NAME, get_utc_now().isoformat())
             
-            # 4. Peer Watchdog Check (Redis)
+            # 4. Peer Watchdog Check
             for peer in ALL_WATCHDOGS:
                 if peer == WATCHDOG_NAME:
                     continue
@@ -78,11 +77,12 @@ def main():
                 elif peer_hb and (current_time - peer_hb) <= HEARTBEAT_TIMEOUT:
                     peer_alerted[peer] = False
 
-            # 5. Worker Heartbeat Check (Supabase)
+            # 5. Worker Heartbeat Check
             current_state = state.get_state()
             active_worker = current_state.get("active_worker", "none")
             
             if active_worker != "none":
+                # P1 FIX: Will transparently fall back to Redis if Supabase is down
                 worker_hb_str = state.get_worker_heartbeat(active_worker)
                 worker_hb = parse_utc(worker_hb_str)
                 
@@ -91,7 +91,7 @@ def main():
                     
                     if time_diff > HEARTBEAT_TIMEOUT:
                         if backup_cooldown_until and current_time < backup_cooldown_until:
-                            pass # In cooldown
+                            pass 
                         else:
                             backup_attempts = int(current_state.get("backup_attempts", 0))
                             if backup_attempts < 3:

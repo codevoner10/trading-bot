@@ -17,7 +17,6 @@ def main():
 
     state = HybridStateManager(WORKER_NAME)
     
-    # If Supabase is down at start, we cannot safely coordinate. Exit.
     if not state.supabase:
         send_telegram(f"❌ <b>[FATAL]</b> {WORKER_NAME} cannot start without Supabase state. Exiting.", channel="ops")
         sys.exit(1)
@@ -40,7 +39,7 @@ def main():
     })
     state.update_worker_heartbeat(WORKER_NAME, format_utc(start_time))
     state.log_event("START", WORKER_NAME, f"{WORKER_NAME} started shift at {start_time}")
-    state.cleanup_old_events() # Clean events on startup
+    state.cleanup_old_events()
     
     send_telegram(
         f"🟢 <b>[START]</b> {WORKER_NAME} بدأ وردية جديدة\n"
@@ -66,7 +65,7 @@ def main():
                 state.log_event("HARD_STOP", WORKER_NAME, "Reached 5.5h limit")
                 break
 
-            # Reconnection Check (Every 10 min)
+            # Reconnection Check
             if (current_time - last_reconnect_check).total_seconds() >= 600:
                 state._reconnect_supabase()
                 state._reconnect_redis()
@@ -80,10 +79,12 @@ def main():
                 state.log_event("HANDOVER", WORKER_NAME, f"Handed over to {new_worker}")
                 break
                 
-            # Update Heartbeat (Every 60s to Supabase)
+            # Update Heartbeat (Every 60s)
             if (current_time - last_heartbeat).total_seconds() >= HEARTBEAT_INTERVAL:
-                state.update_worker_heartbeat(WORKER_NAME, format_utc(current_time))
-                last_heartbeat = current_time
+                # P1 FIX: Re-verify ownership to prevent race condition stale heartbeat
+                if state.get_state().get("active_worker") == WORKER_NAME:
+                    state.update_worker_heartbeat(WORKER_NAME, format_utc(current_time))
+                    last_heartbeat = current_time
                 
             # Market Analysis (Every 15m)
             if last_analysis is None or (current_time - last_analysis).total_seconds() >= ANALYSIS_INTERVAL:
@@ -92,7 +93,6 @@ def main():
                 if market_data:
                     msg = format_market_message(market_data, WORKER_NAME)
                     send_telegram(msg, channel="market")
-                    # Write analysis time to Redis Cache
                     state.set_cache("analysis:last_analysis_time", format_utc(current_time), ttl=3600)
                     last_analysis = current_time
                     api_error_count = 0
