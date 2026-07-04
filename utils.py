@@ -4,18 +4,24 @@ import json
 import requests
 import redis
 from datetime import datetime, timezone, timedelta
-from supabase import create_client, Client
 
 # ===================== CONFIGURATION =====================
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-UPSTASH_REDIS_URL = os.getenv("UPSTASH_REDIS_URL")
+def clean_env(name):
+    val = os.getenv(name, "")
+    val = val.strip()
+    if len(val) >= 2 and ((val[0] == '"' and val[-1] == '"') or (val[0] == "'" and val[-1] == "'")):
+        val = val[1:-1]
+    return val
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID_OPS = os.getenv("TELEGRAM_CHAT_ID")
-CHAT_ID_MARKET = os.getenv("TELEGRAM_CHAT_ID_MARKET")
-GH_PAT = os.getenv("GH_PAT")
-GH_REPO = os.getenv("GH_REPO")
+SUPABASE_URL = clean_env("SUPABASE_URL")
+SUPABASE_KEY = clean_env("SUPABASE_KEY")
+UPSTASH_REDIS_URL = clean_env("UPSTASH_REDIS_URL")
+
+TELEGRAM_TOKEN = clean_env("TELEGRAM_TOKEN")
+CHAT_ID_OPS = clean_env("TELEGRAM_CHAT_ID")
+CHAT_ID_MARKET = clean_env("TELEGRAM_CHAT_ID_MARKET")
+GH_PAT = clean_env("GH_PAT")
+GH_REPO = clean_env("GH_REPO")
 
 # ===================== TIME FUNCTIONS =====================
 def get_utc_now():
@@ -24,25 +30,128 @@ def get_utc_now():
 def format_utc(dt):
     return dt.isoformat()
 
-def parse_utc(time_str):
-    if not time_str:
+def parse_utc(time_val):
+    if not time_val:
         return None
-    try:
-        if time_str.endswith('Z'):
-            time_str = time_str[:-1] + '+00:00'
-        return datetime.fromisoformat(time_str)
-    except:
-        return None
+    if isinstance(time_val, datetime):
+        return time_val if time_val.tzinfo else time_val.replace(tzinfo=timezone.utc)
+    if isinstance(time_val, str):
+        if time_val.endswith('Z'):
+            time_val = time_val[:-1] + '+00:00'
+        try:
+            return datetime.fromisoformat(time_val)
+        except:
+            return None
+    return None
+
+# ===================== SUPABASE REST CLIENT =====================
+class SupabaseRestClient:
+    def __init__(self, url, key):
+        self.url = url.rstrip("/")
+        self.key = key
+        self.headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        }
+    
+    def _request(self, method, path, params=None, json_data=None):
+        url = f"{self.url}/rest/v1{path}"
+        try:
+            resp = requests.request(method, url, headers=self.headers, params=params, json=json_data, timeout=15)
+            if resp.status_code in [200, 201, 204]:
+                return {"data": resp.json() if resp.text else {}, "error": None}
+            else:
+                return {"data": None, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        except Exception as e:
+            return {"data": None, "error": str(e)}
+    
+    def table(self, table_name):
+        return TableQuery(self, table_name)
+
+class TableQuery:
+    def __init__(self, client, table_name):
+        self.client = client
+        self.table_name = table_name
+        self._select = "*"
+        self._filters = {}
+        self._single = False
+    
+    def select(self, cols="*"):
+        self._select = cols
+        return self
+    
+    def eq(self, col, val):
+        self._filters[col] = f"eq.{val}"
+        return self
+    
+    def single(self):
+        self._single = True
+        return self
+    
+    def execute(self):
+        path = f"/{self.table_name}"
+        params = {"select": self._select}
+        params.update(self._filters)
+        result = self.client._request("GET", path, params=params)
+        if result["error"]:
+            raise Exception(result["error"])
+        data = result["data"]
+        if self._single and isinstance(data, list) and len(data) > 0:
+            return type('obj', (object,), {'data': data[0]})()
+        return type('obj', (object,), {'data': data})()
+    
+    def update(self, data):
+        path = f"/{self.table_name}"
+        params = dict(self._filters)
+        result = self.client._request("PATCH", path, params=params, json_data=data)
+        if result["error"]:
+            raise Exception(result["error"])
+        return type('obj', (object,), {'data': result["data"]})()
+    
+    def upsert(self, data):
+        path = f"/{self.table_name}"
+        headers = dict(self.client.headers)
+        headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+        url = f"{self.client.url}/rest/v1{path}"
+        try:
+            resp = requests.post(url, headers=headers, json=data, timeout=15)
+            if resp.status_code in [200, 201]:
+                return type('obj', (object,), {'data': resp.json()})()
+            else:
+                raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            raise Exception(str(e))
+    
+    def insert(self, data):
+        path = f"/{self.table_name}"
+        result = self.client._request("POST", path, json_data=data)
+        if result["error"]:
+            raise Exception(result["error"])
+        return type('obj', (object,), {'data': result["data"]})()
+    
+    def delete(self):
+        path = f"/{self.table_name}"
+        params = dict(self._filters)
+        result = self.client._request("DELETE", path, params=params)
+        if result["error"]:
+            raise Exception(result["error"])
+        return type('obj', (object,), {'data': result["data"]})()
+    
+    def lt(self, col, val):
+        self._filters[col] = f"lt.{val}"
+        return self
 
 # ===================== HYBRID STATE MANAGER =====================
 class HybridStateManager:
     def __init__(self, component_name="System"):
         self.component_name = component_name
-        self.supabase: Client = None
+        self.supabase = None
         self.redis_client = None
         
         self.memory_state = {"active_worker": "none", "worker_start_time": "", "backup_attempts": 0}
-        self.memory_cache = {} # For analysis timestamps & watchdog HBs
+        self.memory_cache = {}
         
         self.sb_alerted = False
         self.redis_alerted = False
@@ -59,9 +168,10 @@ class HybridStateManager:
             print("[WARN] Supabase URL/KEY missing. Falling back to memory.")
             return
         try:
-            self.supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            self.supabase = SupabaseRestClient(SUPABASE_URL, SUPABASE_KEY)
+            # Test connection
             self.supabase.table("system_state").select("id").eq("id", 1).execute()
-            print("[INFO] Connected to Supabase.")
+            print("[INFO] Connected to Supabase (REST).")
         except Exception as e:
             print(f"[ERROR] Supabase connection failed: {e}")
             self.supabase = None
@@ -71,7 +181,7 @@ class HybridStateManager:
         if not UPSTASH_REDIS_URL:
             return
         try:
-            self.redis_client = redis.from_url(UPSTASH_REDIS_URL, ssl=True, decode_responses=True)
+            self.redis_client = redis.from_url(UPSTASH_REDIS_URL, decode_responses=True)
             self.redis_client.ping()
             print("[INFO] Connected to Upstash Redis.")
         except Exception as e:
@@ -117,9 +227,10 @@ class HybridStateManager:
                 send_telegram(f"✅ <b>[RECOVERED]</b> {self.component_name} reconnected to Redis.", channel="ops")
                 self.redis_alerted = False
                 for k, v in self.memory_cache.items():
-                    self.set_cache(k, v, ttl=3600)
+                    if k.startswith(f"watchdog:hb:{self.component_name}") or k.startswith("analysis:"):
+                        self.set_cache(k, v, ttl=3600)
 
-    # --- STATE METHODS (Supabase Primary) ---
+    # --- STATE METHODS ---
     def get_state(self):
         if self.supabase:
             try:
@@ -162,6 +273,8 @@ class HybridStateManager:
         return self.memory_cache.get(f"worker_hb_{worker_name}")
 
     def update_worker_heartbeat(self, worker_name, time_str):
+        # Dual-write to Redis for watchdog visibility
+        self.set_cache(f"worker:hb:{worker_name}", time_str, ttl=300)
         if self.supabase:
             try:
                 self.supabase.table("worker_heartbeats").upsert({"worker_name": worker_name, "last_heartbeat": time_str}).execute()
@@ -194,7 +307,7 @@ class HybridStateManager:
             except Exception:
                 pass
 
-    # --- CACHE METHODS (Redis Primary) ---
+    # --- CACHE METHODS ---
     def get_cache(self, key):
         if self.redis_client:
             try:
@@ -217,7 +330,7 @@ class HybridStateManager:
         self.memory_cache[key] = value
         return False
 
-    # --- WATCHDOG HEARTBEATS (Redis Primary) ---
+    # --- WATCHDOG HEARTBEATS ---
     def update_watchdog_heartbeat(self, wd_name, time_str):
         return self.set_cache(f"watchdog:hb:{wd_name}", time_str, ttl=3600)
 
@@ -239,6 +352,7 @@ def send_telegram(message, channel="ops"):
 
 # ===================== MARKET DATA =====================
 def fetch_market_data(worker_name, symbol="EUR/USD"):
+    from urllib.parse import quote
     key_map = {
         "Worker_A": os.getenv("TWELVEDATA_KEY_A"),
         "Worker_B": os.getenv("TWELVEDATA_KEY_B"),
@@ -260,7 +374,7 @@ def fetch_market_data(worker_name, symbol="EUR/USD"):
         if not key:
             continue
         try:
-            url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=15min&outputsize=1&apikey={key}"
+            url = f"https://api.twelvedata.com/time_series?symbol={quote(symbol)}&interval=15min&outputsize=1&apikey={key}"
             response = requests.get(url, timeout=10)
             data = response.json()
             
@@ -320,7 +434,7 @@ def trigger_github_workflow(workflow_file, inputs=None):
             print(f"[INFO] Triggered workflow: {workflow_file}")
             return True
         else:
-            print(f"[ERROR] GitHub trigger failed: {response.status_code} - {response.text}")
+            print(f"[ERROR] GitHub trigger failed: {response.status_code} - {response.text[:200]}")
             return False
     except Exception as e:
         print(f"[ERROR] GitHub trigger exception: {e}")
