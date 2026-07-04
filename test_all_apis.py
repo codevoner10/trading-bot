@@ -47,7 +47,7 @@ def test_redis():
         return "❌ Redis: URL فارغ"
     try:
         import redis
-        client = redis.from_url(redis_url, ssl=True, decode_responses=True)
+        client = redis.from_url(redis_url, decode_responses=True)
         if client.ping():
             return "✅ Redis: OK (PING نجح)"
         else:

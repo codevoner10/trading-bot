@@ -71,7 +71,7 @@ class HybridStateManager:
         if not UPSTASH_REDIS_URL:
             return
         try:
-            self.redis_client = redis.from_url(UPSTASH_REDIS_URL, ssl=True, decode_responses=True)
+            self.redis_client = redis.from_url(UPSTASH_REDIS_URL, decode_responses=True)
             self.redis_client.ping()
             print("[INFO] Connected to Upstash Redis.")
         except Exception as e:
