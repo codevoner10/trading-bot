@@ -16,7 +16,7 @@ def main():
         sys.exit(1)
 
     state = HybridStateManager(WORKER_NAME)
-
+    
     # If Supabase is down at start, we cannot safely coordinate. Exit.
     if not state.supabase:
         send_telegram(f"❌ <b>[FATAL]</b> {WORKER_NAME} cannot start without Supabase state. Exiting.", channel="ops")
@@ -24,7 +24,7 @@ def main():
 
     start_time = get_utc_now()
     hard_stop_time = start_time + MAX_RUNTIME
-
+    
     # 1. Overlap Safety
     current_state = state.get_state()
     existing_start_time = parse_utc(current_state.get("worker_start_time"))
@@ -33,38 +33,33 @@ def main():
         return
 
     # 2. Claim Shift
-    success = state.update_state({
+    state.update_state({
         "active_worker": WORKER_NAME,
         "worker_start_time": format_utc(start_time),
         "backup_attempts": 0
     })
-
-    if not success:
-        send_telegram(f"❌ <b>[FATAL]</b> {WORKER_NAME} failed to claim state in Supabase. Exiting.", channel="ops")
-        sys.exit(1)
-
     state.update_worker_heartbeat(WORKER_NAME, format_utc(start_time))
     state.log_event("START", WORKER_NAME, f"{WORKER_NAME} started shift at {start_time}")
-    state.cleanup_old_events()
-
+    state.cleanup_old_events() # Clean events on startup
+    
     send_telegram(
         f"🟢 <b>[START]</b> {WORKER_NAME} بدأ وردية جديدة\n"
         f"⏰ <b>الوقت:</b> {start_time.strftime('%H:%M:%S UTC')}\n"
         f"📊 <b>الرمز:</b> {SYMBOL}",
         channel="ops"
     )
-
+    
     last_heartbeat = start_time
     last_analysis = None
     api_error_count = 0
     api_alert_sent = False
     last_reconnect_check = start_time
-
+    
     # 3. Main Loop
     while True:
         try:
             current_time = get_utc_now()
-
+            
             # Hard Stop Check
             if current_time > hard_stop_time:
                 send_telegram(f"⚠️ <b>[HARD STOP]</b> {WORKER_NAME} reached 5.5h limit. Exiting.", channel="ops")
@@ -76,7 +71,7 @@ def main():
                 state._reconnect_supabase()
                 state._reconnect_redis()
                 last_reconnect_check = current_time
-
+                
             # Handover Check
             current_state = state.get_state()
             if current_state.get("active_worker") != WORKER_NAME:
@@ -84,23 +79,20 @@ def main():
                 send_telegram(f"✅ <b>[HANDOVER]</b> {WORKER_NAME} سلم الوردية لـ {new_worker}", channel="ops")
                 state.log_event("HANDOVER", WORKER_NAME, f"Handed over to {new_worker}")
                 break
-
+                
             # Update Heartbeat (Every 60s to Supabase)
             if (current_time - last_heartbeat).total_seconds() >= HEARTBEAT_INTERVAL:
-                # Re-verify we are still active before writing
-                current_state = state.get_state()
-                if current_state.get("active_worker") != WORKER_NAME:
-                    continue
                 state.update_worker_heartbeat(WORKER_NAME, format_utc(current_time))
                 last_heartbeat = current_time
-
+                
             # Market Analysis (Every 15m)
             if last_analysis is None or (current_time - last_analysis).total_seconds() >= ANALYSIS_INTERVAL:
                 market_data = fetch_market_data(WORKER_NAME, SYMBOL)
-
+                
                 if market_data:
                     msg = format_market_message(market_data, WORKER_NAME)
                     send_telegram(msg, channel="market")
+                    # Write analysis time to Redis Cache
                     state.set_cache("analysis:last_analysis_time", format_utc(current_time), ttl=3600)
                     last_analysis = current_time
                     api_error_count = 0
@@ -111,9 +103,9 @@ def main():
                         send_telegram(f"⚠️ <b>[API ERROR]</b> {WORKER_NAME}: Keys exhausted. Suppressing alerts.", channel="ops")
                         state.log_event("ERROR", WORKER_NAME, "API keys exhausted")
                         api_alert_sent = True
-
+            
             time.sleep(30)
-
+            
         except Exception as e:
             send_telegram(f"❌ <b>[EXCEPTION]</b> {WORKER_NAME} crashed: {str(e)}. Retrying in 30s.", channel="ops")
             state.log_event("ERROR", WORKER_NAME, f"Exception: {str(e)}")
