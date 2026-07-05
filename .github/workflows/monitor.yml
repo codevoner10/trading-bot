@@ -1,0 +1,42 @@
+name: 24/7 Monitoring Bot
+
+on:
+  schedule:
+    # تشغيل كل 5 دقائق (أو حسب حاجتك)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # تشغيل يدوي
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4  # أقل من فترة الـ cron
+    
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      WORKER_ID: "github-actions-${{ github.run_id }}"
+      CLAIM_TIMEOUT_SECONDS: "300"  # 5 دقائق
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run Monitoring Worker
+        run: python worker.py
+      
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Worker failed. Check logs above."
+          # يمكنك إضافة إرسال إشعار هنا (Slack, Discord, Email)
