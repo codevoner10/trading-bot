@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       worker_id:
-        description: 'Worker ID (optional, auto-generated if empty)'
+        description: 'Worker ID (e.g. Worker_A)'
         required: false
-        default: ''
+        default: 'Worker_A'
 
 concurrency:
   group: monitoring-worker
@@ -18,14 +18,6 @@ jobs:
   worker:
     runs-on: ubuntu-latest
     timeout-minutes: 330
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-      REDIS_URL: ${{ secrets.REDIS_URL }}
-      WORKER_ID: ${{ github.event.inputs.worker_id || format('Worker_{0}', github.run_id) }}
-      HEARTBEAT_INTERVAL: '60'
-      CLAIM_TIMEOUT: '300'
-      MAX_RUNTIME_MINUTES: '330'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,3 +32,11 @@ jobs:
 
       - name: Run Worker
         run: python worker.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          WORKER_ID: ${{ github.event.inputs.worker_id || 'Worker_A' }}
+          HEARTBEAT_INTERVAL: '60'
+          CLAIM_TIMEOUT: '300'
+          MAX_RUNTIME_MINUTES: '330'

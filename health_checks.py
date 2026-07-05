@@ -1,4 +1,4 @@
-"""Health check logic — customizable. Add your own checks here."""
+"""منطق الفحوصات الصحية — قابل للتخصيص."""
 
 import logging
 
@@ -6,57 +6,34 @@ logger = logging.getLogger(__name__)
 
 
 class HealthChecker:
-    """Runs health checks and returns results list."""
+    """فحوصات صحية قابلة للتوسعة."""
 
     def __init__(self, supabase_client):
-        self.db = supabase_client
+        self.supabase = supabase_client
 
     def check_all(self):
+        """تُرجع قائمة نتائج الفحوصات. كل عنصر dict يحتوي على check, ok, details."""
         results = []
-        results.append(self._check_db_connection())
-        results.append(self._check_system_state())
+        results.append(self._check_supabase_connection())
         return results
 
-    def _check_db_connection(self):
+    def _check_supabase_connection(self):
         try:
-            state = self.db.get_state()
+            state = self.supabase.get_state()
             if state:
                 return {
-                    "check": "db_connection",
-                    "status": "ok",
-                    "details": {"db_status": state.get("status", "unknown")}
+                    "check": "supabase_connection",
+                    "ok": True,
+                    "details": {"status": state.get("status")},
                 }
             return {
-                "check": "db_connection",
-                "status": "fail",
-                "details": "Cannot read system_state"
+                "check": "supabase_connection",
+                "ok": False,
+                "details": "get_state() returned None",
             }
-        except Exception as e:
+        except Exception as exc:
             return {
-                "check": "db_connection",
-                "status": "error",
-                "details": str(e)
-            }
-
-    def _check_system_state(self):
-        try:
-            state = self.db.get_state()
-            if not state:
-                return {
-                    "check": "system_state",
-                    "status": "fail",
-                    "details": "No state returned"
-                }
-            active = state.get("active_worker", "none")
-            status = state.get("status", "UNKNOWN")
-            return {
-                "check": "system_state",
-                "status": "ok",
-                "details": {"active_worker": active, "status": status}
-            }
-        except Exception as e:
-            return {
-                "check": "system_state",
-                "status": "error",
-                "details": str(e)
+                "check": "supabase_connection",
+                "ok": False,
+                "details": str(exc),
             }

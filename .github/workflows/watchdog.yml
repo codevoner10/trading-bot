@@ -9,12 +9,6 @@ jobs:
   watchdog:
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-      REDIS_URL: ${{ secrets.REDIS_URL }}
-      WATCHDOG_NAME: ${{ secrets.WATCHDOG_NAME }}
-      ALERT_WEBHOOK: ${{ secrets.ALERT_WEBHOOK }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,3 +23,9 @@ jobs:
 
       - name: Run Watchdog
         run: python watchdog.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          WATCHDOG_NAME: 'watchdog-1'
+          ALERT_WEBHOOK: ${{ secrets.ALERT_WEBHOOK }}
