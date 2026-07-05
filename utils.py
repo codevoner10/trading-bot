@@ -4,6 +4,7 @@ import json
 import requests
 import redis
 from datetime import datetime, timezone, timedelta
+from urllib.parse import quote
 
 # ===================== CONFIGURATION =====================
 def clean_env(name):
@@ -51,11 +52,14 @@ class SupabaseRestClient:
         self.key = key
         self.headers = {
             "apikey": key,
-            "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "Prefer": "return=representation"
         }
-    
+        # JWT legacy keys (service_role) need Authorization Bearer
+        # New sb_secret_... keys must NOT have Authorization header
+        if key.startswith("eyJ"):
+            self.headers["Authorization"] = f"Bearer {key}"
+
     def _request(self, method, path, params=None, json_data=None):
         url = f"{self.url}/rest/v1{path}"
         try:
@@ -66,7 +70,7 @@ class SupabaseRestClient:
                 return {"data": None, "error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
         except Exception as e:
             return {"data": None, "error": str(e)}
-    
+
     def table(self, table_name):
         return TableQuery(self, table_name)
 
@@ -77,19 +81,19 @@ class TableQuery:
         self._select = "*"
         self._filters = {}
         self._single = False
-    
+
     def select(self, cols="*"):
         self._select = cols
         return self
-    
+
     def eq(self, col, val):
         self._filters[col] = f"eq.{val}"
         return self
-    
+
     def single(self):
         self._single = True
         return self
-    
+
     def execute(self):
         path = f"/{self.table_name}"
         params = {"select": self._select}
@@ -101,7 +105,7 @@ class TableQuery:
         if self._single and isinstance(data, list) and len(data) > 0:
             return type('obj', (object,), {'data': data[0]})()
         return type('obj', (object,), {'data': data})()
-    
+
     def update(self, data):
         path = f"/{self.table_name}"
         params = dict(self._filters)
@@ -109,11 +113,16 @@ class TableQuery:
         if result["error"]:
             raise Exception(result["error"])
         return type('obj', (object,), {'data': result["data"]})()
-    
+
     def upsert(self, data):
         path = f"/{self.table_name}"
-        headers = dict(self.client.headers)
-        headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+        headers = {
+            "apikey": self.client.key,
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates,return=representation"
+        }
+        if self.client.key.startswith("eyJ"):
+            headers["Authorization"] = f"Bearer {self.client.key}"
         url = f"{self.client.url}/rest/v1{path}"
         try:
             resp = requests.post(url, headers=headers, json=data, timeout=15)
@@ -123,14 +132,14 @@ class TableQuery:
                 raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
             raise Exception(str(e))
-    
+
     def insert(self, data):
         path = f"/{self.table_name}"
         result = self.client._request("POST", path, json_data=data)
         if result["error"]:
             raise Exception(result["error"])
         return type('obj', (object,), {'data': result["data"]})()
-    
+
     def delete(self):
         path = f"/{self.table_name}"
         params = dict(self._filters)
@@ -138,7 +147,7 @@ class TableQuery:
         if result["error"]:
             raise Exception(result["error"])
         return type('obj', (object,), {'data': result["data"]})()
-    
+
     def lt(self, col, val):
         self._filters[col] = f"lt.{val}"
         return self
@@ -149,17 +158,17 @@ class HybridStateManager:
         self.component_name = component_name
         self.supabase = None
         self.redis_client = None
-        
+
         self.memory_state = {"active_worker": "none", "worker_start_time": "", "backup_attempts": 0}
         self.memory_cache = {}
-        
+
         self.sb_alerted = False
         self.redis_alerted = False
         self.last_sb_alert_time = None
         self.last_redis_alert_time = None
         self.last_sb_reconnect = get_utc_now()
         self.last_redis_reconnect = get_utc_now()
-        
+
         self._connect_supabase()
         self._connect_redis()
 
@@ -169,7 +178,6 @@ class HybridStateManager:
             return
         try:
             self.supabase = SupabaseRestClient(SUPABASE_URL, SUPABASE_KEY)
-            # Test connection
             self.supabase.table("system_state").select("id").eq("id", 1).execute()
             print("[INFO] Connected to Supabase (REST).")
         except Exception as e:
@@ -273,7 +281,6 @@ class HybridStateManager:
         return self.memory_cache.get(f"worker_hb_{worker_name}")
 
     def update_worker_heartbeat(self, worker_name, time_str):
-        # Dual-write to Redis for watchdog visibility
         self.set_cache(f"worker:hb:{worker_name}", time_str, ttl=300)
         if self.supabase:
             try:
@@ -352,7 +359,6 @@ def send_telegram(message, channel="ops"):
 
 # ===================== MARKET DATA =====================
 def fetch_market_data(worker_name, symbol="EUR/USD"):
-    from urllib.parse import quote
     key_map = {
         "Worker_A": os.getenv("TWELVEDATA_KEY_A"),
         "Worker_B": os.getenv("TWELVEDATA_KEY_B"),
@@ -362,10 +368,10 @@ def fetch_market_data(worker_name, symbol="EUR/USD"):
         "Worker_F": os.getenv("TWELVEDATA_KEY_F"),
         "Backup_Z": os.getenv("TWELVEDATA_KEY_BACKUP")
     }
-    
+
     primary_key = key_map.get(worker_name)
     fallback_key = os.getenv("TWELVEDATA_KEY_BACKUP")
-    
+
     keys_to_try = [primary_key]
     if worker_name != "Backup_Z" and fallback_key:
         keys_to_try.append(fallback_key)
@@ -377,7 +383,7 @@ def fetch_market_data(worker_name, symbol="EUR/USD"):
             url = f"https://api.twelvedata.com/time_series?symbol={quote(symbol)}&interval=15min&outputsize=1&apikey={key}"
             response = requests.get(url, timeout=10)
             data = response.json()
-            
+
             if data.get("status") == "ok" and "values" in data:
                 candle = data["values"][0]
                 return {
@@ -390,7 +396,7 @@ def fetch_market_data(worker_name, symbol="EUR/USD"):
                     "datetime": candle["datetime"]
                 }
             elif data.get("code") == 429:
-                continue 
+                continue
         except:
             continue
     return None
@@ -399,7 +405,7 @@ def format_market_message(data, worker_name):
     change = data["close"] - data["open"]
     change_pct = (change / data["open"]) * 100 if data["open"] != 0 else 0
     arrow = "🟢" if change >= 0 else "🔴"
-    
+
     return (
         f"📊 <b>MARKET DATA</b>\n"
         f"━━━━━━━━━━━━━━━\n"
@@ -420,14 +426,14 @@ def trigger_github_workflow(workflow_file, inputs=None):
     if not GH_PAT or not GH_REPO:
         print("[ERROR] GitHub PAT or Repo not configured.")
         return False
-    
+
     url = f"https://api.github.com/repos/{GH_REPO}/actions/workflows/{workflow_file}/dispatches"
     headers = {
         "Authorization": f"token {GH_PAT}",
         "Accept": "application/vnd.github.v3+json"
     }
     payload = {"ref": "main", "inputs": inputs or {}}
-    
+
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         if response.status_code == 204:
