@@ -1,288 +1,308 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-24/7 Monitoring Bot Worker
-Compatible with Supabase New API Keys (sb_secret_...)
-"""
+"""24/7 Monitoring Worker — main worker process."""
 
 import os
 import sys
 import time
-import json
 import signal
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
 
 import requests
 import redis
 
-# ─── Logging ─────────────────────────────────────────────────────────
+from health_checks import HealthChecker
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format='%(asctime)s | %(levelname)-8s | %(message)s'
 )
-logger = logging.getLogger("worker")
+logger = logging.getLogger(__name__)
 
-# ─── Configuration ───────────────────────────────────────────────────
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SUPABASE_SECRET_KEY = os.environ.get("SUPABASE_SECRET_KEY", "")  # sb_secret_...
-REDIS_URL = os.environ.get("REDIS_URL", "")
-WORKER_ID = os.environ.get("WORKER_ID", f"worker_{os.getpid()}")
-CLAIM_TIMEOUT_SECONDS = int(os.environ.get("CLAIM_TIMEOUT_SECONDS", "60"))
 
-# Validate
-if not SUPABASE_URL or not SUPABASE_SECRET_KEY:
-    logger.error("❌ Missing SUPABASE_URL or SUPABASE_SECRET_KEY")
-    sys.exit(1)
-
-# ─── Supabase REST Client ────────────────────────────────────────────
 class SupabaseClient:
-    """
-    PostgREST client using the NEW Supabase Secret Key format.
-    CRITICAL: sb_secret_... keys are NOT JWTs. They must ONLY be sent
-    in the 'apikey' header. Do NOT put them in 'Authorization: Bearer'.
-    """
-    
-    def __init__(self, base_url: str, secret_key: str):
-        self.base_url = base_url
+    """Supabase REST API client using requests only."""
+
+    def __init__(self, url, secret_key):
+        self.url = url.rstrip("/")
         self.secret_key = secret_key
-        self.rest_url = f"{base_url}/rest/v1"
-        
-        # ✅ CORRECT HEADERS for new sb_secret_... keys
-        self.headers = {
-            "apikey": self.secret_key,           # ← المفتاح السري هنا فقط
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Prefer": "return=representation",
-        }
-        # ❌ NO Authorization: Bearer header for sb_secret_ keys!
-        
         self.session = requests.Session()
-        self.session.headers.update(self.headers)
-    
-    def _handle_response(self, response: requests.Response, operation: str) -> Any:
-        """Handle HTTP responses with detailed logging."""
-        if response.status_code >= 400:
-            logger.error(
-                f"❌ {operation} failed | HTTP {response.status_code} | "
-                f"URL: {response.url} | Body: {response.text[:500]}"
-            )
-            response.raise_for_status()
-        return response.json() if response.text else {}
-    
-    def get(self, table: str, params: Optional[Dict] = None) -> Any:
-        """SELECT (Read) - Works with RLS if policies allow."""
-        url = f"{self.rest_url}/{table}"
-        response = self.session.get(url, params=params or {})
-        return self._handle_response(response, f"GET {table}")
-    
-    def post(self, table: str, data: Dict) -> Any:
-        """INSERT (Create) - Requires RLS INSERT policy or secret key bypass."""
-        url = f"{self.rest_url}/{table}"
-        headers = {**self.headers, "Prefer": "return=representation"}
-        response = self.session.post(url, headers=headers, json=data)
-        return self._handle_response(response, f"POST {table}")
-    
-    def patch(self, table: str, column: str, value: Any, data: Dict) -> Any:
-        """UPDATE - Requires RLS UPDATE policy or secret key bypass."""
-        url = f"{self.rest_url}/{table}?{column}=eq.{value}"
-        response = self.session.patch(url, json=data)
-        return self._handle_response(response, f"PATCH {table}")
-    
-    def upsert(self, table: str, data: Dict, on_conflict: str) -> Any:
-        """UPSERT - Insert or update on conflict."""
-        url = f"{self.rest_url}/{table}"
-        headers = {
-            **self.headers,
-            "Prefer": "return=representation,resolution=merge-duplicates",
+        self.headers = {
+            "apikey": secret_key,
+            "Content-Type": "application/json",
+            "Accept": "application/json"
         }
-        params = {"on_conflict": on_conflict}
-        response = self.session.post(url, headers=headers, params=params, json=data)
-        return self._handle_response(response, f"UPSERT {table}")
+        self.consecutive_failures = 0
+        self.circuit_open = False
+
+    def _request(self, method, endpoint, json=None, extra_headers=None):
+        if self.circuit_open:
+            logger.warning("Circuit breaker is open. Skipping request.")
+            return None
+
+        url = f"{self.url}/rest/v1/{endpoint}"
+        headers = dict(self.headers)
+        if extra_headers:
+            headers.update(extra_headers)
+
+        for attempt in range(3):
+            try:
+                resp = self.session.request(
+                    method, url, headers=headers, json=json, timeout=30
+                )
+                if resp.status_code < 400:
+                    self.consecutive_failures = 0
+                    if resp.status_code == 204 or not resp.text:
+                        return True
+                    try:
+                        return resp.json()
+                    except ValueError:
+                        return True
+                else:
+                    logger.error(f"HTTP {resp.status_code}: {resp.text[:300]}")
+            except requests.RequestException as e:
+                logger.error(f"Request exception: {e}")
+
+            self.consecutive_failures += 1
+            if self.consecutive_failures >= 3:
+                self.circuit_open = True
+                logger.critical("Circuit breaker opened after 3 consecutive failures.")
+                return None
+
+            if attempt < 2:
+                backoff = 2 ** (attempt + 1)
+                logger.warning(f"Retrying in {backoff}s (attempt {attempt + 1}/3)")
+                time.sleep(backoff)
+
+        return None
+
+    def get_state(self):
+        result = self._request("GET", "system_state?id=eq.1&select=*")
+        if result and isinstance(result, list) and len(result) > 0:
+            return result[0]
+        return None
+
+    def update_state(self, data):
+        data["updated_at"] = datetime.now(timezone.utc).isoformat()
+        return self._request("PATCH", "system_state?id=eq.1", json=data)
+
+    def upsert_heartbeat(self, table, worker_name, status):
+        now = datetime.now(timezone.utc).isoformat()
+        if table == "worker_heartbeats":
+            data = {
+                "worker_name": worker_name,
+                "status": status,
+                "last_beat": now,
+                "updated_at": now
+            }
+            conflict_col = "worker_name"
+        else:
+            data = {
+                "watchdog_name": worker_name,
+                "status": status,
+                "last_beat": now,
+                "updated_at": now
+            }
+            conflict_col = "watchdog_name"
+
+        extra = {"Prefer": "resolution=merge-duplicates"}
+        return self._request(
+            "POST",
+            f"{table}?on_conflict={conflict_col}",
+            json=data,
+            extra_headers=extra
+        )
+
+    def log_event(self, event_type, severity, details=None):
+        data = {
+            "event_type": event_type,
+            "severity": severity,
+            "details": details or {},
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        return self._request("POST", "event_log", json=data)
 
 
-# ─── Redis Client (Upstash) ────────────────────────────────────────
 class RedisClient:
-    def __init__(self, redis_url: str):
-        if not redis_url:
-            self.client = None
-            logger.warning("⚠️ No REDIS_URL provided. Running without Redis.")
-            return
-        
-        try:
-            self.client = redis.from_url(
-                redis_url,
-                decode_responses=True,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-            )
-            self.client.ping()
-            logger.info("✅ Redis connected")
-        except Exception as e:
-            logger.error(f"❌ Redis connection failed: {e}")
-            self.client = None
-    
-    def set_lock(self, key: str, value: str, ttl: int) -> bool:
-        if not self.client:
-            return True  # Graceful degradation
-        return self.client.set(key, value, nx=True, ex=ttl) is not None
-    
-    def refresh_lock(self, key: str, ttl: int) -> bool:
-        if not self.client:
-            return True
-        return self.client.expire(key, ttl)
-    
-    def release_lock(self, key: str) -> bool:
-        if not self.client:
-            return True
-        return self.client.delete(key) > 0
+    """Redis client for distributed locking via Upstash."""
 
+    SHARED_LOCK_KEY = "monitoring:active_worker"
 
-# ─── Worker Logic ────────────────────────────────────────────────────
-class MonitoringWorker:
-    def __init__(self):
-        self.db = SupabaseClient(SUPABASE_URL, SUPABASE_SECRET_KEY)
-        self.redis = RedisClient(REDIS_URL)
-        self.running = True
-        self.lock_key = "monitoring:active_worker"
-        self.heartbeat_interval = 10  # seconds
-        
-        # Handle graceful shutdown
-        signal.signal(signal.SIGTERM, self._shutdown)
-        signal.signal(signal.SIGINT, self._shutdown)
-    
-    def _shutdown(self, signum, frame):
-        logger.info("🛑 Shutdown signal received. Releasing claim...")
-        self.running = False
-    
-    def _now(self) -> str:
-        return datetime.now(timezone.utc).isoformat()
-    
-    def claim_shift(self) -> bool:
-        """
-        محاولة الحصول على قفل العمل (Claim Shift).
-        إذا نجحت، يتم كتابة الحالة في system_state.
-        """
-        try:
-            # 1. محاولة الحصول على قفل Redis (إذا متاح)
-            lock_acquired = self.redis.set_lock(
-                self.lock_key, WORKER_ID, CLAIM_TIMEOUT_SECONDS
-            )
-            
-            if not lock_acquired:
-                logger.info("🔒 Another worker has the shift. Standing by...")
-                return False
-            
-            # 2. كتابة الحالة في Supabase system_state
-            # نستخدم PATCH لتحديث السجل id=1
-            update_data = {
-                "active_worker": WORKER_ID,
-                "worker_start_time": self._now(),
-                "status": "active",
-                "updated_at": self._now(),
-            }
-            
-            self.db.patch("system_state", "id", 1, update_data)
-            logger.info(f"✅ Shift claimed by {WORKER_ID}")
+    def __init__(self, redis_url):
+        self.redis_client = None
+        if redis_url:
+            try:
+                self.redis_client = redis.from_url(redis_url, decode_responses=True)
+                self.redis_client.ping()
+                logger.info("Connected to Redis.")
+            except Exception as e:
+                logger.error(f"Redis connection failed: {e}")
+                self.redis_client = None
+        else:
+            logger.info("No REDIS_URL set — running without lock (graceful degradation).")
+
+    def acquire_lock(self, worker_id, ttl=300):
+        if not self.redis_client:
             return True
-            
+        try:
+            result = self.redis_client.set(
+                self.SHARED_LOCK_KEY, worker_id, nx=True, ex=ttl
+            )
+            return bool(result)
         except Exception as e:
-            logger.error(f"❌ Failed to claim shift: {e}")
+            logger.error(f"Redis acquire_lock error: {e}")
             return False
-    
-    def send_heartbeat(self):
-        """إرسال نبضة حياة للـ worker."""
+
+    def renew_lock(self, worker_id, ttl=300):
+        if not self.redis_client:
+            return True
         try:
-            data = {
-                "worker_id": WORKER_ID,
-                "timestamp": self._now(),
-                "status": "healthy",
-            }
-            # Upsert لتجنب تكرار السجلات
-            self.db.upsert(
-                "worker_heartbeats",
-                data,
-                on_conflict="worker_id"
-            )
-            self.redis.refresh_lock(self.lock_key, CLAIM_TIMEOUT_SECONDS)
+            current = self.redis_client.get(self.SHARED_LOCK_KEY)
+            if current == worker_id:
+                self.redis_client.expire(self.SHARED_LOCK_KEY, ttl)
+                return True
+            logger.warning(f"Cannot renew lock: owned by {current}, not {worker_id}")
+            return False
         except Exception as e:
-            logger.error(f"❌ Heartbeat failed: {e}")
-    
-    def log_event(self, event_type: str, message: str, details: Optional[Dict] = None):
-        """تسجيل حدث في جدول event_log."""
+            logger.error(f"Redis renew_lock error: {e}")
+            return True
+
+    def release_lock(self, worker_id):
+        if not self.redis_client:
+            return True
         try:
-            data = {
-                "event_type": event_type,
-                "message": message,
-                "details": json.dumps(details) if details else None,
-                "worker_id": WORKER_ID,
-                "created_at": self._now(),
-            }
-            self.db.post("event_log", data)
+            current = self.redis_client.get(self.SHARED_LOCK_KEY)
+            if current == worker_id:
+                self.redis_client.delete(self.SHARED_LOCK_KEY)
+                return True
+            logger.warning(f"Cannot release lock: owned by {current}, not {worker_id}")
+            return False
         except Exception as e:
-            logger.error(f"❌ Failed to log event: {e}")
-    
-    def run_health_checks(self):
-        """تشغيل فحوصات المراقبة (أضف منطقك هنا)."""
-        # مثال: فحص حالة النظام
+            logger.error(f"Redis release_lock error: {e}")
+            return True
+
+    def get_lock_owner(self):
+        if not self.redis_client:
+            return None
         try:
-            state = self.db.get("system_state", {"id": "eq.1"})
-            logger.info(f"📊 System state: {state}")
-            self.log_event("health_check", "System check completed", {"state": state})
+            return self.redis_client.get(self.SHARED_LOCK_KEY)
         except Exception as e:
-            self.log_event("error", f"Health check failed: {str(e)}")
-            raise
-    
-    def release_shift(self):
-        """تحرير الـ Shift عند الإغلاق."""
-        try:
-            self.db.patch("system_state", "id", 1, {
-                "active_worker": None,
-                "status": "idle",
-                "updated_at": self._now(),
-            })
-            self.redis.release_lock(self.lock_key)
-            logger.info("🔓 Shift released")
-        except Exception as e:
-            logger.error(f"❌ Failed to release shift: {e}")
-    
-    def run(self):
-        """الحلقة الرئيسية للـ Worker."""
-        logger.info(f"🚀 Worker {WORKER_ID} starting...")
-        
-        if not self.claim_shift():
-            logger.info("⏳ Could not claim shift. Exiting.")
+            logger.error(f"Redis get_lock_owner error: {e}")
+            return None
+
+
+class MonitoringWorker:
+    """Main monitoring worker process."""
+
+    def __init__(self):
+        self.supabase_url = os.environ.get("SUPABASE_URL", "")
+        self.supabase_key = os.environ.get("SUPABASE_SECRET_KEY", "")
+        self.redis_url = os.environ.get("REDIS_URL", "")
+        self.worker_id = os.environ.get(
+            "WORKER_ID", f"Worker_{int(time.time())}"
+        )
+        self.heartbeat_interval = int(os.environ.get("HEARTBEAT_INTERVAL", "60"))
+        self.claim_timeout = int(os.environ.get("CLAIM_TIMEOUT", "300"))
+        self.max_runtime_minutes = int(os.environ.get("MAX_RUNTIME_MINUTES", "330"))
+
+        if not self.supabase_url or not self.supabase_key:
+            logger.error("Missing SUPABASE_URL or SUPABASE_SECRET_KEY.")
+            sys.exit(1)
+
+        self.db = SupabaseClient(self.supabase_url, self.supabase_key)
+        self.redis = RedisClient(self.redis_url)
+        self.checker = HealthChecker(self.db)
+
+        self.running = True
+        self.start_time = None
+
+        signal.signal(signal.SIGTERM, self.shutdown)
+        signal.signal(signal.SIGINT, self.shutdown)
+
+    def shutdown(self, signum=None, frame=None):
+        logger.info(f"Received signal {signum}. Initiating shutdown...")
+        self.running = False
+
+    def _should_stop(self):
+        if self.start_time is None:
+            return False
+        elapsed = (datetime.now(timezone.utc) - self.start_time).total_seconds() / 60
+        if elapsed >= self.max_runtime_minutes:
+            logger.info(f"Max runtime reached ({self.max_runtime_minutes} min).")
+            return True
+        return False
+
+    def claim_shift(self):
+        if not self.redis.acquire_lock(self.worker_id, ttl=self.claim_timeout):
+            logger.info("Another worker holds the lock. Exiting gracefully.")
             sys.exit(0)
-        
-        self.log_event("worker_start", f"Worker {WORKER_ID} started")
-        
-        last_heartbeat = 0
-        
+
+        now = datetime.now(timezone.utc)
+        result = self.db.update_state({
+            "active_worker": self.worker_id,
+            "worker_start_time": now.isoformat(),
+            "status": "RUNNING"
+        })
+
+        if result is None:
+            logger.critical("Failed to update DB after acquiring lock. Releasing lock.")
+            self.redis.release_lock(self.worker_id)
+            sys.exit(1)
+
+        self.start_time = now
+        logger.info(f"Shift claimed by {self.worker_id}.")
+        self.db.log_event("worker_start", "info", {"worker_id": self.worker_id})
+
+    def send_heartbeat(self):
+        self.db.upsert_heartbeat("worker_heartbeats", self.worker_id, "RUNNING")
+        self.redis.renew_lock(self.worker_id, ttl=self.claim_timeout)
+        logger.debug("Heartbeat sent.")
+
+    def run_health_checks(self):
+        results = self.checker.check_all()
+        for r in results:
+            if r.get("status") != "ok":
+                logger.warning(f"Health check FAILED: {r}")
+                self.db.log_event("health_check_fail", "warning", r)
+            else:
+                logger.debug(f"Health check OK: {r['check']}")
+
+    def release_shift(self):
         try:
-            while self.running:
-                # تشغيل الفحوصات
-                self.run_health_checks()
-                
-                # إرسال نبضة حياة كل X ثواني
-                now = time.time()
-                if now - last_heartbeat >= self.heartbeat_interval:
-                    self.send_heartbeat()
-                    last_heartbeat = now
-                
-                time.sleep(5)
-                
+            self.db.update_state({
+                "active_worker": "none",
+                "worker_start_time": None,
+                "status": "IDLE"
+            })
+            self.db.log_event("worker_stop", "info", {"worker_id": self.worker_id})
+            logger.info("Shift released in DB.")
         except Exception as e:
-            logger.error(f"💥 Worker crashed: {e}")
-            self.log_event("worker_crash", str(e))
-            raise
+            logger.error(f"Error releasing shift in DB: {e}")
+        finally:
+            self.redis.release_lock(self.worker_id)
+            logger.info(f"Redis lock released by {self.worker_id}.")
+
+    def run(self):
+        self.claim_shift()
+        try:
+            last_heartbeat = 0
+            last_health_check = 0
+            while self.running and not self._should_stop():
+                now_ts = time.time()
+                if now_ts - last_heartbeat >= self.heartbeat_interval:
+                    self.send_heartbeat()
+                    last_heartbeat = now_ts
+                if now_ts - last_health_check >= 30:
+                    self.run_health_checks()
+                    last_health_check = now_ts
+                time.sleep(5)
+        except Exception as e:
+            logger.error(f"Unexpected error in main loop: {e}")
+            self.db.log_event("worker_error", "error", {"error": str(e)})
         finally:
             self.release_shift()
-            logger.info("👋 Worker stopped")
 
 
-# ─── Entry Point ─────────────────────────────────────────────────────
 if __name__ == "__main__":
     worker = MonitoringWorker()
     worker.run()

@@ -1,42 +1,42 @@
-name: 24/7 Monitoring Bot
+name: 24/7 Monitoring Worker
 
 on:
   schedule:
-    # تشغيل كل 5 دقائق (أو حسب حاجتك)
     - cron: '*/5 * * * *'
-  workflow_dispatch:  # تشغيل يدوي
+  workflow_dispatch:
+    inputs:
+      worker_id:
+        description: 'Worker ID (optional, auto-generated if empty)'
+        required: false
+        default: ''
+
+concurrency:
+  group: monitoring-worker
+  cancel-in-progress: false
 
 jobs:
-  monitor:
+  worker:
     runs-on: ubuntu-latest
-    timeout-minutes: 4  # أقل من فترة الـ cron
-    
+    timeout-minutes: 330
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
-      WORKER_ID: "github-actions-${{ github.run_id }}"
-      CLAIM_TIMEOUT_SECONDS: "300"  # 5 دقائق
-    
+      WORKER_ID: ${{ github.event.inputs.worker_id || format('Worker_{0}', github.run_id) }}
+      HEARTBEAT_INTERVAL: '60'
+      CLAIM_TIMEOUT: '300'
+      MAX_RUNTIME_MINUTES: '330'
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
-      
-      - name: Set up Python
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      
-      - name: Run Monitoring Worker
+        run: pip install -r requirements.txt
+
+      - name: Run Worker
         run: python worker.py
-      
-      - name: Notify on failure
-        if: failure()
-        run: |
-          echo "Worker failed. Check logs above."
-          # يمكنك إضافة إرسال إشعار هنا (Slack, Discord, Email)
