@@ -1,14 +1,9 @@
 name: Watchdog Alpha Shift
 on:
   schedule:
-    # يبدأ الساعة 00:00، 05:00، 10:00، 15:00، 20:00 UTC (كل 5 ساعات للتأكد من التبادل)
+    # يبدأ الساعة 00:00، 05:00، 10:00، 15:00، 20:00 (بتوقيت UTC)
     - cron: '0 0,5,10,15,20 * * *'
   workflow_dispatch:
-
-# صلاحيات الكتابة ضرورية لتمكين الكلب من تشغيل الـ Workflows الأخرى عبر API
-permissions:
-  actions: write
-  contents: read
 
 jobs:
   run-watchdog:
@@ -20,9 +15,9 @@ jobs:
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      # مفتاح GitHub المدمج تلقائياً (لا تحتاج لإضافته في Secrets)
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
+      # GitHub API Credentials
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}         # <-- تم التعديل هنا
+      REPO_NAME: ${{ secrets.REPO_NAME }}         # <-- تأكد من إضافته في الأسرار
 
     steps:
       - name: Checkout Code
@@ -36,7 +31,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install httpx supabase redis python-dotenv
 
       - name: Run Watchdog Engine
         run: python watchdog/main.py
