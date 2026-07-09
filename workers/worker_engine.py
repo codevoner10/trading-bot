@@ -67,7 +67,8 @@ class WorkerEngine:
             await asyncio.sleep(30)
 
     async def collect_market_data(self, current_time: float):
-        success, price, is_limited = await self.api.fetch_price("EUR/USD")
+        # استدعاء الدالة المحدثة لجلب بيانات الشمعة
+        success, candle_data, is_limited = await self.api.fetch_market_data("EUR/USD", "15min")
         
         if is_limited:
             self.is_rate_limited = True
@@ -75,6 +76,6 @@ class WorkerEngine:
             await self.notifier.send_api_limit(self.worker_id)
             return
             
-        if success and price:
+        if success and candle_data:
             self.cache.set_last_fetch_time(self.worker_id, current_time)
-            await self.notifier.send_market_data(self.worker_id, "EUR/USD", price)
+            await self.notifier.send_market_data(self.worker_id, "EUR/USD", candle_data)

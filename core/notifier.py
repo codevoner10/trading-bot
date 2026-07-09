@@ -1,6 +1,7 @@
 import os
 import httpx
 from datetime import datetime, timezone
+from typing import Dict
 
 class TelegramNotifier:
     """إرسال الإشعارات والإنذارات الاحترافية إلى تيليجرام"""
@@ -79,15 +80,21 @@ class TelegramNotifier:
         )
         await self._send(msg)
 
-    async def send_market_data(self, worker_id: str, symbol: str, price: float) -> None:
+    async def send_market_data(self, worker_id: str, symbol: str, data: Dict) -> None:
+        change_emoji = "🟢" if data['change'] >= 0 else "🔴"
         msg = (
             f"📊 MARKET DATA\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"💱 الرمز: {symbol}\n"
-            f"💹 السعر الحالي: {price}\n"
-            f"⏱ الفاصل الزمني: 15 دقيقة\n"
-            f"👤 العامل: {worker_id}\n"
-            f"⏰ الوقت: {self._get_utc_time()}"
+            f"💱 Symbol: {symbol}\n"
+            f"⏱ Timeframe: M15\n"
+            f"💹 Price: {data['close']:.5f}\n"
+            f"📈 High: {data['high']:.5f}\n"
+            f"📉 Low: {data['low']:.5f}\n"
+            f"🔓 Open: {data['open']:.5f}\n"
+            f"{change_emoji} Change: {data['change']:.5f} ({data['percent_change']:.2f}%)\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"⏰ Time: {self._get_utc_time()}\n"
+            f"👤 Worker: {worker_id}"
         )
         await self._send(msg)
 
