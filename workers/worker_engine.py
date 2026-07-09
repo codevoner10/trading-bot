@@ -1,6 +1,8 @@
 import os
+import sys
 import time
 import asyncio
+from datetime import datetime, timezone
 from core.database_manager import DatabaseManager
 from core.cache_manager import CacheManager
 from core.notifier import TelegramNotifier
@@ -25,6 +27,24 @@ class WorkerEngine:
             await self.notifier.send_db_error(self.worker_id)
             return False
             
+        # --- حماية التعارض الزمني (Dual-Active Protection) ---
+        if state.get('active_worker') == self.worker_id:
+            last_hb_str = state.get('last_worker_heartbeat')
+            if last_hb_str:
+                try:
+                    last_hb_dt = datetime.fromisoformat(last_hb_str)
+                    if last_hb_dt.tzinfo is None:
+                        last_hb_dt = last_hb_dt.replace(tzinfo=timezone.utc)
+                    diff_seconds = (datetime.now(timezone.utc) - last_hb_dt).total_seconds()
+                    
+                    # إذا كانت آخر نبضة منذ أقل من دقيقتين، فالنسخة الأخرى تعمل
+                    if diff_seconds < 120:
+                        print(f"[{self.worker_id}] Detected active instance (heartbeat {diff_seconds:.0f}s ago). Exiting silently.")
+                        sys.exit(0)
+                except Exception:
+                    pass
+        # --------------------------------------------------------
+
         if not self.db.claim_active_role('worker', self.worker_id):
             return False
             
@@ -67,7 +87,6 @@ class WorkerEngine:
             await asyncio.sleep(30)
 
     async def collect_market_data(self, current_time: float):
-        # استدعاء الدالة المحدثة لجلب بيانات الشمعة
         success, candle_data, is_limited = await self.api.fetch_market_data("EUR/USD", "15min")
         
         if is_limited:

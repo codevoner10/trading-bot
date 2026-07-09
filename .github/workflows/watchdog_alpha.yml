@@ -1,9 +1,13 @@
 name: Watchdog Alpha Shift
 on:
   schedule:
-    # يبدأ الساعة 00:00، 05:00، 10:00، 15:00، 20:00 (بتوقيت UTC)
+    # يبدأ 5 مرات في اليوم: 00:00, 05:00, 10:00, 15:00, 20:00 UTC
     - cron: '0 0,5,10,15,20 * * *'
   workflow_dispatch:
+
+concurrency:
+  group: watchdog-alpha
+  cancel-in-progress: false
 
 jobs:
   run-watchdog:
@@ -15,9 +19,8 @@ jobs:
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      # GitHub API Credentials
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}         # <-- تم التعديل هنا
-      REPO_NAME: ${{ secrets.REPO_NAME }}         # <-- تأكد من إضافته في الأسرار
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      REPO_NAME: ${{ secrets.REPO_NAME }}
 
     steps:
       - name: Checkout Code

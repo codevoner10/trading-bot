@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import asyncio
 from datetime import datetime, timezone
@@ -24,6 +25,24 @@ class WatchdogEngine:
             await self.notifier.send_db_error(self.watchdog_id)
             return False
             
+        # --- حماية التعارض الزمني (Dual-Active Protection) ---
+        if state.get('active_watchdog') == self.watchdog_id:
+            last_hb_str = state.get('last_watchdog_heartbeat')
+            if last_hb_str:
+                try:
+                    last_hb_dt = datetime.fromisoformat(last_hb_str)
+                    if last_hb_dt.tzinfo is None:
+                        last_hb_dt = last_hb_dt.replace(tzinfo=timezone.utc)
+                    diff_seconds = (datetime.now(timezone.utc) - last_hb_dt).total_seconds()
+                    
+                    # إذا كانت آخر نبضة منذ أقل من دقيقتين، فالنسخة الأخرى تعمل
+                    if diff_seconds < 120:
+                        print(f"[{self.watchdog_id}] Detected active instance (heartbeat {diff_seconds:.0f}s ago). Exiting silently.")
+                        sys.exit(0)
+                except Exception:
+                    pass
+        # --------------------------------------------------------
+
         if not self.db.claim_active_role('watchdog', self.watchdog_id):
             return False
             
@@ -43,7 +62,6 @@ class WatchdogEngine:
             state = self.db.read_system_state()
             if state and state.get('active_watchdog') != self.watchdog_id:
                 self.db.log_event("WATCHDOG_STOP", "Watchdog", self.watchdog_id, "Handed over.")
-                # لا حاجة لرسالة هنا، الكلب الجديد سيرسل رسالة البدء
                 break
                 
             # Heartbeat (كل 60 ثانية)
@@ -71,7 +89,6 @@ class WatchdogEngine:
             diff_seconds = (datetime.now(timezone.utc) - last_hb_dt).total_seconds()
             
             if diff_seconds >= 180:
-                # حساب المدة التي قضاها العامل قبل الموت
                 duration_before_death = 0.0
                 if worker_start_str:
                     start_dt = datetime.fromisoformat(worker_start_str)
@@ -107,7 +124,6 @@ class WatchdogEngine:
         
         await self.github.dispatch_workflow(f'watchdog_{next_watchdog.lower()}.yml')
         
-        # الانتظار حتى يستيقظ الكلب التالي
         for _ in range(10):
             state = self.db.read_system_state()
             if state and state.get('active_watchdog') != self.watchdog_id: break

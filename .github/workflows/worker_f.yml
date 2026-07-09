@@ -1,9 +1,12 @@
 name: Worker F Shift
 on:
   schedule:
-    # يبدأ يومياً الساعة 20:00 UTC
-    - cron: '0 20 * * *'
+    - cron: '0 20 * * *'  # يبدأ يومياً الساعة 20:00 UTC
   workflow_dispatch:
+
+concurrency:
+  group: worker-f-shift
+  cancel-in-progress: false
 
 jobs:
   run-worker:
@@ -30,7 +33,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install httpx supabase redis python-dotenv
 
       - name: Run Worker Engine
         run: python workers/main.py
