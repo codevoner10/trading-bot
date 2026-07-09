@@ -22,30 +22,35 @@ class WorkerEngine:
     async def initialize(self) -> bool:
         state = self.db.read_system_state()
         if not state:
-            await self.notifier.send_message(f"🚨 <b>{self.worker_id}</b> فشل الاتصال بقاعدة البيانات. إيقاف آمن.")
+            await self.notifier.send_db_error(self.worker_id)
             return False
+            
         if not self.db.claim_active_role('worker', self.worker_id):
-            await self.notifier.send_message(f"🚨 <b>{self.worker_id}</b> فشل الاستحواذ.")
             return False
+            
         self.db.log_event("START", "Worker", self.worker_id, "Worker started shift successfully.")
-        await self.notifier.send_message(f"🟢 <b>{self.worker_id}</b> بدأ وردية جديدة.")
+        active_watchdog = state.get('active_watchdog', 'Unknown')
+        await self.notifier.send_worker_start(self.worker_id, "EUR/USD", active_watchdog)
         return True
 
     async def run_main_loop(self):
         while True:
             current_time = time.time()
             
-            # Hard Stop (5.5 ساعات)
+            # Hard Stop (5.5 ساعات = 19800 ثانية)
             if (current_time - self.start_time) >= 19800:
+                duration = current_time - self.start_time
                 self.db.log_event("HARD_STOP", "Worker", self.worker_id, "Exceeded 5.5 hours limit.")
-                await self.notifier.send_message(f"⚠️ <b>{self.worker_id}</b> بلغ حد الإغلاق الإجباري.")
+                await self.notifier.send_worker_hard_stop(self.worker_id, duration)
                 break
                 
             # Handover Check
             state = self.db.read_system_state()
             if state and state.get('active_worker') != self.worker_id:
-                self.db.log_event("HANDOVER", "Worker", self.worker_id, f"Detected new worker: {state.get('active_worker')}")
-                await self.notifier.send_message(f"✅ <b>{self.worker_id}</b> سلم الوردية بنجاح.")
+                duration = current_time - self.start_time
+                next_worker = state.get('active_worker')
+                self.db.log_event("HANDOVER", "Worker", self.worker_id, f"Detected new worker: {next_worker}")
+                await self.notifier.send_handover(self.worker_id, next_worker, duration)
                 break
                 
             # Heartbeat (كل 60 ثانية)
@@ -53,7 +58,7 @@ class WorkerEngine:
                 if self.db.update_heartbeat('worker', self.worker_id):
                     self.last_heartbeat_time = current_time
                     
-            # Data Collection (كل 15 دقيقة)
+            # Data Collection (كل 15 دقيقة = 900 ثانية)
             if not self.is_rate_limited:
                 last_fetch = self.cache.get_last_fetch_time(self.worker_id)
                 if not last_fetch or (current_time - last_fetch) >= 900:
@@ -63,11 +68,13 @@ class WorkerEngine:
 
     async def collect_market_data(self, current_time: float):
         success, price, is_limited = await self.api.fetch_price("EUR/USD")
+        
         if is_limited:
             self.is_rate_limited = True
             self.db.log_event("API_LIMIT", "Worker", self.worker_id, "API rate limit (429) reached.")
-            await self.notifier.send_message(f"🚫 <b>{self.worker_id}</b> استنفد حد الطلبات (429).")
+            await self.notifier.send_api_limit(self.worker_id)
             return
+            
         if success and price:
             self.cache.set_last_fetch_time(self.worker_id, current_time)
-            await self.notifier.send_message(f"📊 <b>{self.worker_id}</b>\nEUR/USD Price: <b>{price}</b>")
+            await self.notifier.send_market_data(self.worker_id, "EUR/USD", price)

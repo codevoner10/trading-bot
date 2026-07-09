@@ -21,12 +21,14 @@ class WatchdogEngine:
     async def initialize(self) -> bool:
         state = self.db.read_system_state()
         if not state:
-            await self.notifier.send_message(f"🚨 <b>{self.watchdog_id}</b> فشل الاتصال بقاعدة البيانات.")
+            await self.notifier.send_db_error(self.watchdog_id)
             return False
+            
         if not self.db.claim_active_role('watchdog', self.watchdog_id):
             return False
+            
         self.db.log_event("WATCHDOG_START", "Watchdog", self.watchdog_id, "Started monitoring shift.")
-        await self.notifier.send_message(f"👀 <b>{self.watchdog_id}</b> بدأ وردية المراقبة.")
+        await self.notifier.send_watchdog_start(self.watchdog_id)
         return True
 
     async def run_main_loop(self):
@@ -41,7 +43,7 @@ class WatchdogEngine:
             state = self.db.read_system_state()
             if state and state.get('active_watchdog') != self.watchdog_id:
                 self.db.log_event("WATCHDOG_STOP", "Watchdog", self.watchdog_id, "Handed over.")
-                await self.notifier.send_message(f"✅ <b>{self.watchdog_id}</b> سلم وردية المراقبة.")
+                # لا حاجة لرسالة هنا، الكلب الجديد سيرسل رسالة البدء
                 break
                 
             # Heartbeat (كل 60 ثانية)
@@ -57,37 +59,55 @@ class WatchdogEngine:
     async def check_worker_health(self, state: Dict):
         active_worker = state.get('active_worker')
         last_hb_str = state.get('last_worker_heartbeat')
+        worker_start_str = state.get('worker_start_time')
+        
         if not active_worker or active_worker == 'none' or not last_hb_str: return
             
         try:
             last_hb_dt = datetime.fromisoformat(last_hb_str)
             if last_hb_dt.tzinfo is None:
                 last_hb_dt = last_hb_dt.replace(tzinfo=timezone.utc)
+                
             diff_seconds = (datetime.now(timezone.utc) - last_hb_dt).total_seconds()
             
             if diff_seconds >= 180:
-                await self.handle_worker_failure(active_worker)
+                # حساب المدة التي قضاها العامل قبل الموت
+                duration_before_death = 0.0
+                if worker_start_str:
+                    start_dt = datetime.fromisoformat(worker_start_str)
+                    if start_dt.tzinfo is None:
+                        start_dt = start_dt.replace(tzinfo=timezone.utc)
+                    duration_before_death = (last_hb_dt - start_dt).total_seconds()
+
+                await self.handle_worker_failure(active_worker, last_hb_str, diff_seconds / 60, duration_before_death)
         except Exception as e:
             print(f"[Watchdog Error] Parse time failed: {e}")
 
-    async def handle_worker_failure(self, dead_worker_name: str):
+    async def handle_worker_failure(self, dead_worker: str, last_hb: str, elapsed_min: float, duration_before_death: float):
         attempts = self.db.read_system_state().get('backup_attempts', 0)
+        
         if attempts >= 3:
-            print(f"[Watchdog] Safe Mode. Attempts exhausted ({attempts}).")
+            await self.notifier.send_safe_mode()
             return
             
         new_attempts = self.db.increment_backup_attempts()
-        self.db.log_event("FAIL", "Worker", dead_worker_name, "Declared dead.")
+        self.db.log_event("FAIL", "Worker", dead_worker, "Declared dead.")
         self.db.log_event("BACKUP", "Watchdog", self.watchdog_id, f"Triggering Backup_Z. Attempt {new_attempts}/3")
-        await self.notifier.send_message(f"🚨 <b>طوارئ!</b>\nالعامل <b>{dead_worker_name}</b> مات.\nجاري تشغيل Backup_Z... [المحاولة {new_attempts}/3]")
+        
+        await self.notifier.send_worker_fail(dead_worker, last_hb, elapsed_min, duration_before_death)
+        await self.notifier.send_emergency_dispatch(self.watchdog_id, new_attempts)
+        
         await self.github.dispatch_workflow('backup_worker.yml')
 
     async def handle_hard_stop(self):
         self.db.log_event("HARD_STOP", "Watchdog", self.watchdog_id, "Exceeded 5.5 hours.")
-        await self.notifier.send_message(f"⚠️ <b>{self.watchdog_id}</b> بلغ حد الإغلاق الإجباري. تشغيل الكلب التالي إجبارياً.")
+        
         next_watchdog = "Beta" if self.watchdog_id == "Alpha" else "Alpha"
+        await self.notifier.send_watchdog_self_dispatch(self.watchdog_id, next_watchdog)
+        
         await self.github.dispatch_workflow(f'watchdog_{next_watchdog.lower()}.yml')
         
+        # الانتظار حتى يستيقظ الكلب التالي
         for _ in range(10):
             state = self.db.read_system_state()
             if state and state.get('active_watchdog') != self.watchdog_id: break
