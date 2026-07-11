@@ -6,9 +6,9 @@ class TelegramNotifier:
     """إرسال إشعارات النظام الداخلية (لوحة قيادة المركبة)"""
     
     def __init__(self):
-        # المركبة تستخدم مفاتيحها الخاصة المستقلة
         self.bot_token = os.getenv("SYSTEM_BOT_TOKEN")
-        self.chat_id = os.getenv("SYSTEM_CHAT_ID")
+        # إجبار المعرف ليكون نصاً (String) لمنع مشاكل الـ JSON
+        self.chat_id = str(os.getenv("SYSTEM_CHAT_ID")) if os.getenv("SYSTEM_CHAT_ID") else None
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
     def _format_duration(self, seconds: float) -> str:
@@ -25,13 +25,18 @@ class TelegramNotifier:
         return datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     async def _send(self, text: str) -> None:
-        if not self.bot_token or not self.chat_id: return
+        if not self.bot_token or not self.chat_id:
+            print("[Notifier Error] SYSTEM_BOT_TOKEN or SYSTEM_CHAT_ID is missing.")
+            return
         payload = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"}
         try:
             async with httpx.AsyncClient() as client:
-                await client.post(self.base_url, json=payload, timeout=10.0)
+                response = await client.post(self.base_url, json=payload, timeout=10.0)
+                # طباعة خطأ تيليجرام في السجلات إذا لم يكن الإرسال ناجحاً
+                if response.status_code != 200:
+                    print(f"[Notifier Telegram Error] Status: {response.status_code}, Response: {response.text}")
         except Exception as e:
-            print(f"[Notifier Error] Failed to send message: {e}")
+            print(f"[Notifier Network Error] Failed to send message: {e}")
 
     # --- رسائل العمال ---
     async def send_worker_start(self, worker_id: str, trigger_source: str, prev_worker: str, gap_seconds: float) -> None:
