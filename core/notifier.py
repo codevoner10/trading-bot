@@ -3,11 +3,12 @@ import httpx
 from datetime import datetime, timezone
 
 class TelegramNotifier:
-    """إرسال الإشعارات والإنذارات الاحترافية إلى تيليجرام"""
+    """إرسال إشعارات النظام الداخلية (لوحة قيادة المركبة)"""
     
     def __init__(self):
-        self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        # المركبة تستخدم مفاتيحها الخاصة المستقلة
+        self.bot_token = os.getenv("SYSTEM_BOT_TOKEN")
+        self.chat_id = os.getenv("SYSTEM_CHAT_ID")
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
     def _format_duration(self, seconds: float) -> str:
@@ -33,7 +34,7 @@ class TelegramNotifier:
             print(f"[Notifier Error] Failed to send message: {e}")
 
     # --- رسائل العمال ---
-    async def send_worker_start(self, worker_id: str, symbol: str, watchdog: str, trigger_source: str, prev_worker: str, gap_seconds: float) -> None:
+    async def send_worker_start(self, worker_id: str, trigger_source: str, prev_worker: str, gap_seconds: float) -> None:
         if gap_seconds > 180:
             msg = (
                 f"⚠️ [GAP DETECTED] {worker_id} بدأ وردية جديدة\n"
@@ -42,7 +43,7 @@ class TelegramNotifier:
                 f"⏰ وقت البدء: {self._get_utc_time()}\n"
                 f"📥 استلم من: {prev_worker}\n"
                 f"🔌 مصدر التشغيل: {trigger_source}\n"
-                f"🕳️ مدة انقطاع جمع البيانات: {self._format_duration(gap_seconds)}\n"
+                f"🕳️ مدة انقطاع المراقبة: {self._format_duration(gap_seconds)}\n"
                 f"🚨 ملاحظة: النظام عانى من فجوة. جاري استئناف العمل..."
             )
         else:
@@ -51,9 +52,6 @@ class TelegramNotifier:
                 f"━━━━━━━━━━━━━━━\n"
                 f"👤 العامل: {worker_id}\n"
                 f"⏰ وقت البدء: {self._get_utc_time()}\n"
-                f"🔄 المدة المجدولة: 4 ساعات\n"
-                f"📊 الرمز المستهدف: {symbol}\n"
-                f"🛡️ المراقب الحالي: {watchdog}\n"
                 f"📥 استلم من: {prev_worker}\n"
                 f"🔌 مصدر التشغيل: {trigger_source}\n"
                 f"🔄 الحالة: استلام سلس، لا توجد فجوات زمنية."
@@ -83,31 +81,14 @@ class TelegramNotifier:
         )
         await self._send(msg)
 
-    async def send_api_limit(self, worker_id: str) -> None:
+    async def send_task_failure(self, worker_id: str, task_name: str, error_msg: str) -> None:
         msg = (
-            f"🚫 [API LIMIT] {worker_id} استنفد حد الطلبات\n"
+            f"⚠️ [TASK ERROR] السائق تعثر، لكن المركبة تسير!\n"
             f"━━━━━━━━━━━━━━━\n"
             f"👤 العامل: {worker_id}\n"
-            f"⚠️ الحالة: توقف جلب البيانات مؤقتاً (429)\n"
-            f"🫀 ملاحظة: العامل ما زال حياً ويُرسل النبضات لحماية وردليته."
-        )
-        await self._send(msg)
-
-    async def send_market_data(self, worker_id: str, symbol: str, data: dict) -> None:
-        change_emoji = "🟢" if data['change'] >= 0 else "🔴"
-        msg = (
-            f"📊 MARKET DATA\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"💱 Symbol: {symbol}\n"
-            f"⏱ Timeframe: M15\n"
-            f"💹 Price: {data['close']:.5f}\n"
-            f"📈 High: {data['high']:.5f}\n"
-            f"📉 Low: {data['low']:.5f}\n"
-            f"🔓 Open: {data['open']:.5f}\n"
-            f"{change_emoji} Change: {data['change']:.5f} ({data['percent_change']:.2f}%)\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"⏰ Time: {self._get_utc_time()}\n"
-            f"👤 Worker: {worker_id}"
+            f"🧠 السائق (Task): {task_name}\n"
+            f"❌ الخطأ: {error_msg[:200]}\n"
+            f"🫀 ملاحظة: المركبة ما زالت ترسل النبضات وحية."
         )
         await self._send(msg)
 
@@ -122,7 +103,7 @@ class TelegramNotifier:
                 f"📥 استلم من: {prev_watchdog}\n"
                 f"🔌 مصدر التشغيل: {trigger_source}\n"
                 f"🕳️ مدة انقطاع المراقبة: {self._format_duration(gap_seconds)}\n"
-                f"🚨 ملاحظة: النظام كان بدون مراقب. جاري الفحص الاستباقي..."
+                f"🚨 ملاحظة: النظام كان بدون مراقب."
             )
         else:
             msg = (
@@ -132,7 +113,7 @@ class TelegramNotifier:
                 f"⏰ وقت البدء: {self._get_utc_time()}\n"
                 f"📥 استلم من: {prev_watchdog}\n"
                 f"🔌 مصدر التشغيل: {trigger_source}\n"
-                f"🔄 الحالة: استلام سلس، لا توجد فجوات زمنية."
+                f"🔄 الحالة: استلام سلس."
             )
         await self._send(msg)
 
@@ -176,7 +157,7 @@ class TelegramNotifier:
             f"🛑 [SAFE MODE] النظام يدخل في وضع الراحة الآمنة\n"
             f"━━━━━━━━━━━━━━━\n"
             f"⚠️ السبب: استنفاد 3 محاولات لتشغيل الطوارئ فاشلة.\n"
-            f"🛠 الإجراء: توقف التدخل التلقائي لمنع الإزعاج (Anti-Spam).\n"
+            f"🛠 الإجراء: توقف التدخل التلقائي.\n"
             f"👨‍💻 مطلوب: تدخل بشري لفحص النظام."
         )
         await self._send(msg)
@@ -185,7 +166,6 @@ class TelegramNotifier:
         msg = (
             f"🚨 [DB ERROR] {component_name} فشل في الاتصال بقاعدة البيانات\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"🛑 الإجراء: إيقاف تشغيل آمن (Fail-Safe).\n"
-            f"💡 السبب: منع تشغيل عاملين متعارضين (Dual-Active) في غياب التنسيق."
+            f"🛑 الإجراء: إيقاف تشغيل آمن (Fail-Safe)."
         )
         await self._send(msg)

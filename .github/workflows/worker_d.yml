@@ -19,29 +19,29 @@ jobs:
     timeout-minutes: 360
     env:
       WORKER_ID: "Worker_D"
-      API_KEY: ${{ secrets.KEY_D }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}
+      ACTIVE_TASK: "eur_usd_fetcher"
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      REDIS_URL: ${{ secrets.REDIS_URL }}
+      SYSTEM_BOT_TOKEN: ${{ secrets.SYSTEM_BOT_TOKEN }}
+      SYSTEM_CHAT_ID: ${{ secrets.SYSTEM_CHAT_ID }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
       REPO_NAME: ${{ secrets.REPO_NAME }}
-      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      API_KEY: ${{ secrets.KEY_D }}
+      TASK_BOT_TOKEN: ${{ secrets.TASK_BOT_TOKEN }}
+      TASK_CHAT_ID: ${{ secrets.TASK_CHAT_ID }}
       
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install httpx supabase redis python-dotenv
-
       - name: Run Worker Engine
         run: python workers/main.py

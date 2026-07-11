@@ -17,15 +17,18 @@ jobs:
     timeout-minutes: 360
     env:
       WORKER_ID: "Backup_Z"
-      API_KEY: ${{ secrets.KEY_BACKUP }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'Watchdog_Emergency' }}
+      ACTIVE_TASK: "eur_usd_fetcher"
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      REDIS_URL: ${{ secrets.REDIS_URL }}
+      SYSTEM_BOT_TOKEN: ${{ secrets.SYSTEM_BOT_TOKEN }}
+      SYSTEM_CHAT_ID: ${{ secrets.SYSTEM_CHAT_ID }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
       REPO_NAME: ${{ secrets.REPO_NAME }}
-      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'Watchdog_Emergency' }} # <-- تمت الإضافة
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      API_KEY: ${{ secrets.KEY_BACKUP }}
+      TASK_BOT_TOKEN: ${{ secrets.TASK_BOT_TOKEN }}
+      TASK_CHAT_ID: ${{ secrets.TASK_CHAT_ID }}
 
     steps:
       - name: Checkout Code
