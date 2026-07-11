@@ -5,9 +5,7 @@ class GitHubActionsClient:
     """إطلاق مسارات العمل (Workflows) برمجياً عبر GitHub API"""
     
     def __init__(self):
-        # استخدام PAT_TOKEN بدلاً من GITHUB_TOKEN لتشغيل الـ Workflows
         self.token = os.getenv("PAT_TOKEN")
-        # استخدام REPO_NAME بدلاً من GITHUB_REPO
         self.repo = os.getenv("REPO_NAME") 
         if not self.token or not self.repo:
             raise ValueError("PAT_TOKEN or REPO_NAME missing in environment variables.")
@@ -18,18 +16,19 @@ class GitHubActionsClient:
         }
         self.base_url = f"https://api.github.com/repos/{self.repo}/actions/workflows"
 
-    async def dispatch_workflow(self, workflow_filename: str) -> bool:
-        """
-        إرسال طلب تشغيل (workflow_dispatch) لملف YAML محدد.
-        """
+    async def dispatch_workflow(self, workflow_filename: str, trigger_source: str = "Proactive_Handover") -> bool:
+        """إرسال طلب تشغيل مع تمرير مصدر التشغيل كمدخل (inputs)"""
         url = f"{self.base_url}/{workflow_filename}/dispatches"
-        payload = {"ref": "main"} # يفترض أن الكود موجود على فرع main
+        payload = {
+            "ref": "main",
+            "inputs": {
+                "trigger_source": trigger_source
+            }
+        }
         
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, headers=self.headers, json=payload, timeout=10.0)
-                
-                # 204 هو رمز النجاح لطلب التشغيل في GitHub API
                 if response.status_code == 204:
                     print(f"[GitHub API] Successfully dispatched {workflow_filename}")
                     return True

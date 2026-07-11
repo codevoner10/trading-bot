@@ -1,8 +1,13 @@
 name: Worker F Shift
 on:
   schedule:
-    - cron: '0 20 * * *'  # يبدأ يومياً الساعة 20:00 UTC
+    - cron: '0 20 * * *'
   workflow_dispatch:
+    inputs:
+      trigger_source:
+        description: 'Source of trigger'
+        required: false
+        default: 'GitHub_Cron'
 
 concurrency:
   group: worker-f-shift
@@ -20,6 +25,9 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      REPO_NAME: ${{ secrets.REPO_NAME }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}
       
     steps:
       - name: Checkout Code

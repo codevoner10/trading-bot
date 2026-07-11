@@ -1,6 +1,11 @@
 name: Backup Worker Z (Emergency)
 on:
-  workflow_dispatch:  # يتم استدعاؤه فقط بواسطة الـ Watchdog
+  workflow_dispatch:
+    inputs:
+      trigger_source:
+        description: 'Source of trigger'
+        required: false
+        default: 'Watchdog_Emergency'
 
 concurrency:
   group: backup-worker-z
@@ -18,20 +23,20 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      REPO_NAME: ${{ secrets.REPO_NAME }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'Watchdog_Emergency' }} # <-- تمت الإضافة
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install httpx supabase redis python-dotenv
-
       - name: Run Backup Engine
         run: python workers/main.py

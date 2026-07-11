@@ -1,9 +1,13 @@
 name: Watchdog Beta Shift
 on:
   schedule:
-    # يبدأ 5 مرات في اليوم: 02:30, 07:30, 12:30, 17:30, 22:30 UTC
     - cron: '30 2,7,12,17,22 * * *'
   workflow_dispatch:
+    inputs:
+      trigger_source:
+        description: 'Source of trigger'
+        required: false
+        default: 'GitHub_Cron'
 
 concurrency:
   group: watchdog-beta
@@ -21,6 +25,7 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
       REPO_NAME: ${{ secrets.REPO_NAME }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}
 
     steps:
       - name: Checkout Code

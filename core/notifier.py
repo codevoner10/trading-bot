@@ -1,7 +1,6 @@
 import os
 import httpx
 from datetime import datetime, timezone
-from typing import Dict
 
 class TelegramNotifier:
     """إرسال الإشعارات والإنذارات الاحترافية إلى تيليجرام"""
@@ -12,20 +11,19 @@ class TelegramNotifier:
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
     def _format_duration(self, seconds: float) -> str:
-        """تحويل الثواني إلى صيغة مقروءة (ساعات ودقائق)"""
         seconds = int(seconds)
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
-        if hours > 0:
-            return f"{hours} ساعات و {minutes} دقائق"
+        if hours > 0: return f"{hours} ساعات و {minutes} دقائق"
         return f"{minutes} دقائق"
 
     def _get_utc_time(self) -> str:
-        """إرجاع الوقت الحالي بصيغة موحدة"""
         return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
+    def _get_time_from_ts(self, timestamp: float) -> str:
+        return datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
     async def _send(self, text: str) -> None:
-        """دالة الإرسال الأساسية (Fail-safe)"""
         if not self.bot_token or not self.chat_id: return
         payload = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"}
         try:
@@ -35,27 +33,43 @@ class TelegramNotifier:
             print(f"[Notifier Error] Failed to send message: {e}")
 
     # --- رسائل العمال ---
-    async def send_worker_start(self, worker_id: str, symbol: str, watchdog: str) -> None:
-        msg = (
-            f"🟢 [START] {worker_id} بدأ وردية جديدة\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"👤 العامل: {worker_id}\n"
-            f"⏰ وقت البدء: {self._get_utc_time()}\n"
-            f"🔄 المدة المجدولة: 4 ساعات\n"
-            f"📊 الرمز المستهدف: {symbol}\n"
-            f"🛡️ المراقب الحالي: {watchdog}"
-        )
+    async def send_worker_start(self, worker_id: str, symbol: str, watchdog: str, trigger_source: str, prev_worker: str, gap_seconds: float) -> None:
+        if gap_seconds > 180:
+            msg = (
+                f"⚠️ [GAP DETECTED] {worker_id} بدأ وردية جديدة\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"👤 العامل: {worker_id}\n"
+                f"⏰ وقت البدء: {self._get_utc_time()}\n"
+                f"📥 استلم من: {prev_worker}\n"
+                f"🔌 مصدر التشغيل: {trigger_source}\n"
+                f"🕳️ مدة انقطاع جمع البيانات: {self._format_duration(gap_seconds)}\n"
+                f"🚨 ملاحظة: النظام عانى من فجوة. جاري استئناف العمل..."
+            )
+        else:
+            msg = (
+                f"🟢 [START] {worker_id} بدأ وردية جديدة\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"👤 العامل: {worker_id}\n"
+                f"⏰ وقت البدء: {self._get_utc_time()}\n"
+                f"🔄 المدة المجدولة: 4 ساعات\n"
+                f"📊 الرمز المستهدف: {symbol}\n"
+                f"🛡️ المراقب الحالي: {watchdog}\n"
+                f"📥 استلم من: {prev_worker}\n"
+                f"🔌 مصدر التشغيل: {trigger_source}\n"
+                f"🔄 الحالة: استلام سلس، لا توجد فجوات زمنية."
+            )
         await self._send(msg)
 
-    async def send_handover(self, current_worker: str, next_worker: str, duration_seconds: float) -> None:
+    async def send_worker_shift_summary(self, current_worker: str, next_worker: str, start_time_ts: float, duration_seconds: float) -> None:
         msg = (
-            f"✅ [HANDOVER] {current_worker} سلم الوردية بنجاح\n"
+            f"🏁 [SHIFT SUMMARY] {current_worker} أنهى وردية جمع البيانات\n"
             f"━━━━━━━━━━━━━━━\n"
             f"📤 المسلم: {current_worker}\n"
             f"📥 المستلم: {next_worker}\n"
-            f"⏰ وقت التسليم: {self._get_utc_time()}\n"
+            f"⏰ وقت البدء: {self._get_time_from_ts(start_time_ts)}\n"
+            f"⏰ وقت الانتهاء: {self._get_utc_time()}\n"
             f"⏱️ مدة العمل الفعلية: {self._format_duration(duration_seconds)}\n"
-            f"💡 الحالة: تسليم سلس (Zero Downtime)"
+            f"💡 الحالة: تسليم سلس (Proactive Handover)"
         )
         await self._send(msg)
 
@@ -65,8 +79,7 @@ class TelegramNotifier:
             f"━━━━━━━━━━━━━━━\n"
             f"👤 العامل: {worker_id}\n"
             f"⏱️ مدة العمل الفعلية: {self._format_duration(duration_seconds)}\n"
-            f"📝 السبب: الخروج اضطرارياً لتجنب قتل GitHub للعملية.\n"
-            f"🚨 ملاحظة: العامل التالي تأخر، قد يتدخل الـ Watchdog."
+            f"📝 السبب: الخروج اضطرارياً لتجنب قتل GitHub للعملية."
         )
         await self._send(msg)
 
@@ -80,7 +93,7 @@ class TelegramNotifier:
         )
         await self._send(msg)
 
-    async def send_market_data(self, worker_id: str, symbol: str, data: Dict) -> None:
+    async def send_market_data(self, worker_id: str, symbol: str, data: dict) -> None:
         change_emoji = "🟢" if data['change'] >= 0 else "🔴"
         msg = (
             f"📊 MARKET DATA\n"
@@ -99,13 +112,40 @@ class TelegramNotifier:
         await self._send(msg)
 
     # --- رسائل كلاب الحراسة ---
-    async def send_watchdog_start(self, watchdog_id: str) -> None:
+    async def send_watchdog_start(self, watchdog_id: str, trigger_source: str, prev_watchdog: str, gap_seconds: float) -> None:
+        if gap_seconds > 180:
+            msg = (
+                f"⚠️ [GAP DETECTED] {watchdog_id} بدأ وردية المراقبة\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"👤 المراقب: {watchdog_id}\n"
+                f"⏰ وقت البدء: {self._get_utc_time()}\n"
+                f"📥 استلم من: {prev_watchdog}\n"
+                f"🔌 مصدر التشغيل: {trigger_source}\n"
+                f"🕳️ مدة انقطاع المراقبة: {self._format_duration(gap_seconds)}\n"
+                f"🚨 ملاحظة: النظام كان بدون مراقب. جاري الفحص الاستباقي..."
+            )
+        else:
+            msg = (
+                f"👀 [START] {watchdog_id} بدأ وردية المراقبة\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"👤 المراقب: {watchdog_id}\n"
+                f"⏰ وقت البدء: {self._get_utc_time()}\n"
+                f"📥 استلم من: {prev_watchdog}\n"
+                f"🔌 مصدر التشغيل: {trigger_source}\n"
+                f"🔄 الحالة: استلام سلس، لا توجد فجوات زمنية."
+            )
+        await self._send(msg)
+
+    async def send_watchdog_shift_summary(self, current_watchdog: str, next_watchdog: str, start_time_ts: float, duration_seconds: float) -> None:
         msg = (
-            f"👀 [WATCHDOG] {watchdog_id} بدأ وردية المراقبة\n"
+            f"🏁 [SHIFT SUMMARY] {current_watchdog} أنهى وردية المراقبة\n"
             f"━━━━━━━━━━━━━━━\n"
-            f"👤 المراقب: {watchdog_id}\n"
-            f"⏰ وقت البدء: {self._get_utc_time()}\n"
-            f"🔄 الفترة: 2.5 ساعات (قابلة للتمدد 5.5 كحد أقصى)"
+            f"📤 المسلم: {current_watchdog}\n"
+            f"📥 المستلم: {next_watchdog}\n"
+            f"⏰ وقت البدء: {self._get_time_from_ts(start_time_ts)}\n"
+            f"⏰ وقت الانتهاء: {self._get_utc_time()}\n"
+            f"⏱️ مدة العمل الفعلية: {self._format_duration(duration_seconds)}\n"
+            f"💡 الحالة: تسليم سلس (Proactive Handover)"
         )
         await self._send(msg)
 
@@ -138,16 +178,6 @@ class TelegramNotifier:
             f"⚠️ السبب: استنفاد 3 محاولات لتشغيل الطوارئ فاشلة.\n"
             f"🛠 الإجراء: توقف التدخل التلقائي لمنع الإزعاج (Anti-Spam).\n"
             f"👨‍💻 مطلوب: تدخل بشري لفحص النظام."
-        )
-        await self._send(msg)
-
-    async def send_watchdog_self_dispatch(self, watchdog_id: str, next_watchdog: str) -> None:
-        msg = (
-            f"⚙️ [SELF-DISPATCH] {watchdog_id} بلغ حد الإغلاق الإجباري\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"👤 المراقب: {watchdog_id}\n"
-            f"⏱ الحد الزمني: 5.5 ساعات\n"
-            f"🔄 الإجراء: تم إرسال أمر تشغيل إجباري لـ {next_watchdog} عبر API."
         )
         await self._send(msg)
 

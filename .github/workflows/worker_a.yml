@@ -1,8 +1,13 @@
 name: Worker A Shift
 on:
   schedule:
-    - cron: '0 0 * * *'  # يبدأ يومياً الساعة 00:00 UTC
+    - cron: '0 0 * * *'
   workflow_dispatch:
+    inputs:
+      trigger_source:
+        description: 'Source of trigger'
+        required: false
+        default: 'GitHub_Cron'
 
 concurrency:
   group: worker-a-shift
@@ -20,20 +25,20 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      REPO_NAME: ${{ secrets.REPO_NAME }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}  # <-- تمت الإضافة
       
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install httpx supabase redis python-dotenv
-
       - name: Run Worker Engine
         run: python workers/main.py
