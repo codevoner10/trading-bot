@@ -25,8 +25,6 @@ jobs:
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       SYSTEM_BOT_TOKEN: ${{ secrets.SYSTEM_BOT_TOKEN }}
       SYSTEM_CHAT_ID: ${{ secrets.SYSTEM_CHAT_ID }}
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-      REPO_NAME: ${{ secrets.REPO_NAME }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
       API_KEY: ${{ secrets.KEY_F }}
       TASK_BOT_TOKEN: ${{ secrets.TASK_BOT_TOKEN }}

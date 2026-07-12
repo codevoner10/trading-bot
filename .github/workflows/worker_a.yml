@@ -18,16 +18,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
+      # --- مفاتيح المركبة ---
       WORKER_ID: "Worker_A"
-      API_KEY: ${{ secrets.KEY_A }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}
+      ACTIVE_TASK: "eur_usd_fetcher"
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      SYSTEM_BOT_TOKEN: ${{ secrets.SYSTEM_BOT_TOKEN }}
+      SYSTEM_CHAT_ID: ${{ secrets.SYSTEM_CHAT_ID }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-      REPO_NAME: ${{ secrets.REPO_NAME }}
-      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}  # <-- تمت الإضافة
+      # --- مفاتيح السائق ---
+      API_KEY: ${{ secrets.KEY_A }}
+      TASK_BOT_TOKEN: ${{ secrets.TASK_BOT_TOKEN }}
+      TASK_CHAT_ID: ${{ secrets.TASK_CHAT_ID }}
       
     steps:
       - name: Checkout Code

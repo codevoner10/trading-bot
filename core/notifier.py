@@ -7,7 +7,6 @@ class TelegramNotifier:
     
     def __init__(self):
         self.bot_token = os.getenv("SYSTEM_BOT_TOKEN")
-        # إجبار المعرف ليكون نصاً (String) لمنع مشاكل الـ JSON
         self.chat_id = str(os.getenv("SYSTEM_CHAT_ID")) if os.getenv("SYSTEM_CHAT_ID") else None
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
@@ -32,7 +31,6 @@ class TelegramNotifier:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(self.base_url, json=payload, timeout=10.0)
-                # طباعة خطأ تيليجرام في السجلات إذا لم يكن الإرسال ناجحاً
                 if response.status_code != 200:
                     print(f"[Notifier Telegram Error] Status: {response.status_code}, Response: {response.text}")
         except Exception as e:
@@ -72,7 +70,7 @@ class TelegramNotifier:
             f"⏰ وقت البدء: {self._get_time_from_ts(start_time_ts)}\n"
             f"⏰ وقت الانتهاء: {self._get_utc_time()}\n"
             f"⏱️ مدة العمل الفعلية: {self._format_duration(duration_seconds)}\n"
-            f"💡 الحالة: تسليم سلس (Proactive Handover)"
+            f"💡 الحالة: تسليم سلس"
         )
         await self._send(msg)
 
@@ -131,20 +129,31 @@ class TelegramNotifier:
             f"⏰ وقت البدء: {self._get_time_from_ts(start_time_ts)}\n"
             f"⏰ وقت الانتهاء: {self._get_utc_time()}\n"
             f"⏱️ مدة العمل الفعلية: {self._format_duration(duration_seconds)}\n"
-            f"💡 الحالة: تسليم سلس (Proactive Handover)"
+            f"💡 الحالة: تسليم سلس"
         )
         await self._send(msg)
 
-    async def send_worker_fail(self, dead_worker: str, last_hb: str, elapsed_min: float, duration_before_death: float) -> None:
-        msg = (
-            f"🔴 [FAIL] {dead_worker} توقف عن العمل!\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"💀 العامل المتوقف: {dead_worker}\n"
-            f"⏱️ مدة العمل قبل التوقف: {self._format_duration(duration_before_death)}\n"
-            f"⏰ آخر نبضة مسجلة: {last_hb}\n"
-            f"⏱ الوقت المنقضي دون نبضات: {elapsed_min:.1f} دقيقة\n"
-            f"🚨 المراقب المكتشف: {os.getenv('WATCHDOG_ID', 'Unknown')}"
-        )
+    async def send_worker_fail(self, dead_worker: str, last_hb: str, elapsed_min: float, duration_before_death: float, reason: str) -> None:
+        if reason == "Shift Delay (Overworked)":
+            msg = (
+                f"⏳ [SHIFT DELAY] {dead_worker} تأخر في تسليم الوردية!\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"💀 العامل المتأخر: {dead_worker}\n"
+                f"⏱️ مدة العمل الحالية: {self._format_duration(duration_before_death)}\n"
+                f"📝 السبب: العامل حي (يرسل نبضات) لكن المجدول فشل في تشغيل العامل التالي.\n"
+                f"🚨 المراقب المكتشف: {os.getenv('WATCHDOG_ID', 'Unknown')}"
+            )
+        else:
+            msg = (
+                f"🔴 [FAIL] {dead_worker} توقف عن العمل!\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"💀 العامل المتوقف: {dead_worker}\n"
+                f"⏱️ مدة العمل قبل التوقف: {self._format_duration(duration_before_death)}\n"
+                f"⏰ آخر نبضة مسجلة: {last_hb}\n"
+                f"⏱ الوقت المنقضي دون نبضات: {elapsed_min:.1f} دقيقة\n"
+                f"📝 السبب: تجمد العامل (No Heartbeat).\n"
+                f"🚨 المراقب المكتشف: {os.getenv('WATCHDOG_ID', 'Unknown')}"
+            )
         await self._send(msg)
 
     async def send_emergency_dispatch(self, watchdog_id: str, attempt: int) -> None:
