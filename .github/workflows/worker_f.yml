@@ -1,13 +1,11 @@
 name: Worker F Shift
 on:
-  schedule:
-    - cron: '0 20 * * *'
   workflow_dispatch:
     inputs:
       trigger_source:
         description: 'Source of trigger'
         required: false
-        default: 'GitHub_Cron'
+        default: 'External_Cron'
 
 concurrency:
   group: worker-f-shift
@@ -19,7 +17,7 @@ jobs:
     timeout-minutes: 360
     env:
       WORKER_ID: "Worker_F"
-      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'External_Cron' }}
       ACTIVE_TASK: "eur_usd_fetcher"
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

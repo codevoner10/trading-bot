@@ -1,11 +1,13 @@
 name: Watchdog Beta Shift
 on:
+  schedule:
+    - cron: '30 2,7,12,17,22 * * *'
   workflow_dispatch:
     inputs:
       trigger_source:
         description: 'Source of trigger'
         required: false
-        default: 'External_Cron'
+        default: 'GitHub_Cron'
 
 concurrency:
   group: watchdog-beta
@@ -17,7 +19,7 @@ jobs:
     timeout-minutes: 360
     env:
       WATCHDOG_ID: "Beta"
-      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'External_Cron' }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       SYSTEM_BOT_TOKEN: ${{ secrets.SYSTEM_BOT_TOKEN }}

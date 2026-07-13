@@ -1,13 +1,11 @@
 name: Worker B Shift
 on:
-  schedule:
-    - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
       trigger_source:
         description: 'Source of trigger'
         required: false
-        default: 'GitHub_Cron'
+        default: 'External_Cron'
 
 concurrency:
   group: worker-b-shift
@@ -18,16 +16,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      # --- مفاتيح المركبة ---
       WORKER_ID: "Worker_B"
-      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'GitHub_Cron' }}
+      TRIGGER_SOURCE: ${{ github.event.inputs.trigger_source || 'External_Cron' }}
       ACTIVE_TASK: "eur_usd_fetcher"
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       SYSTEM_BOT_TOKEN: ${{ secrets.SYSTEM_BOT_TOKEN }}
       SYSTEM_CHAT_ID: ${{ secrets.SYSTEM_CHAT_ID }}
       REDIS_URL: ${{ secrets.REDIS_URL }}
-      # --- مفاتيح السائق ---
       API_KEY: ${{ secrets.KEY_B }}
       TASK_BOT_TOKEN: ${{ secrets.TASK_BOT_TOKEN }}
       TASK_CHAT_ID: ${{ secrets.TASK_CHAT_ID }}
